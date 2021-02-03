@@ -23,6 +23,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "string.h"
+#include "iis2mdc.h"
+#include "steval_stwinkt1_bus.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,7 +44,6 @@
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
 
-TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim16;
 
 UART_HandleTypeDef huart2;
@@ -57,7 +58,6 @@ static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM16_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -66,12 +66,18 @@ static void MX_TIM1_Init(void);
 /* USER CODE BEGIN 0 */
 uint8_t flag_ADC = 0;
 uint8_t flag_UART = 0;
-#define buffer_size 8
-char buffer[buffer_size];
+uint8_t flag_MAG = 0;
+#define buffer_size 30
+int16_t buffer[buffer_size];
+uint16_t Inicio = 0;
 char parte1[3];
 char parte2;
 void Uart_reception(void);
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
+
+IIS2MDC_Object_t magneto_sensor;
+IIS2MDC_IO_t magneto_IO;
+IIS2MDC_Axes_t magneto_axes;
 /* USER CODE END 0 */
 
 /**
@@ -108,103 +114,62 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM16_Init();
   MX_USART2_UART_Init();
-  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
-	//HAL_TIM_Base_Start_IT(&htim16);
-	estado = reposo;
 
-	HAL_UART_Transmit(&huart2, "hola\n\r", 7,100000);
-	//  HAL_UART_RegisterCallback(&huart2,  HAL_UART_RX_COMPLETE_CB_ID , Uart_reception);
-	HAL_UART_Receive_IT(&huart2, &buffer, buffer_size);
-
-	memcpy(buffer, "000000", buffer_size);
 
 	int periodo = 0;
+
+	//INICIALIZA EL MAGNETOMETRO
+
+	magneto_IO.Address 	= 0x3c;		//0011110b b=0 leer, b=1 escribir
+	magneto_IO.BusType 	= 0; 		//0 si I2C
+	magneto_IO.DeInit 	= BSP_I2C2_DeInit;
+	magneto_IO.GetTick 	= BSP_GetTick;
+	magneto_IO.Init 	= BSP_I2C2_Init;
+	magneto_IO.ReadReg 	= BSP_I2C2_ReadReg;
+	magneto_IO.WriteReg = BSP_I2C2_WriteReg;
+
+	IIS2MDC_RegisterBusIO(&magneto_sensor, &magneto_IO);
+	IIS2MDC_Init(&magneto_sensor);
+	IIS2MDC_MAG_Enable(&magneto_sensor);
+
+	IIS2MDC_MAG_GetAxes(&magneto_sensor, &magneto_axes);
+
+	HAL_TIM_Base_Start_IT(&htim16);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
 	while (1)
 	{
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-		switch (estado)
+
+		if (flag_MAG)
 		{
-			case reposo:
-				if (flag_UART == 1)
-				{
-					flag_UART = 0;
-					memcpy(&parte1, &buffer, 3);
-
-					if ((strcmp(parte1,"adc") == 0) || (strcmp(buffer,"ADC") == 0))		//PARA ENTRAR AL ESTADO ADC HAY QUE MANDAR 6 LETRAS, ADCNOW POR EJEMPLO, PARA LLENAR EL BUFFER
-					{
-						if ((buffer[3]==40) && (buffer[5]==41)) //VALORES CORRESPONDIENTES A ( Y ) EN ASCII
-						{
-							periodo = buffer[4] - '0';
-							estado = ADC_x;
-						}
-						else
-							estado = ADC;
-					}
-					else if ((strcmp(parte1,"pwm") == 0) || (strcmp(buffer,"PWM") == 0))
-					{
-						estado = PWM;
-						periodo = buffer[4] - '0';
-					}
-					memcpy(buffer, "000000", buffer_size);
-				}
-				if (flag_ADC)
-				{
-					flag_ADC = 0;
-
-					HAL_ADC_Start(&hadc1);
-					//ESPERA A QUE SE COMPLETE LA CONVERSION
-					HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-					raw = HAL_ADC_GetValue(&hadc1);
-
-					// Convert to string and print
-					sprintf(msg, "%hu\r\n", raw);
-					HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
-				}
-				break;
-			case ADC:
-
-				HAL_TIM_Base_Stop_IT(&htim16);
-				HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_1);
-
-				HAL_ADC_Start(&hadc1);
-				//ESPERA A QUE SE COMPLETE LA CONVERSION
-				HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-				raw = HAL_ADC_GetValue(&hadc1);
-
-				// Convert to string and print
-				sprintf(msg, "%hu\r\n", raw);
-				HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
-				estado = reposo;
-				break;
-
-			case ADC_x:
-
-				htim16.Instance = TIM16;
-				htim16.Init.Prescaler = 611 * periodo;;
-				htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
-				htim16.Init.Period = 65535;
-				htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-				htim16.Init.RepetitionCounter = 0;
-				htim16.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-				HAL_TIM_Base_Init(&htim16);
-				HAL_TIM_Base_Start_IT(&htim16);
-				estado = reposo;
-				break;
-
-			case PWM:
-				htim1.Instance->CCR1 = 10*periodo;
-				HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
-				break;
-
+			flag_MAG = 0;
+			IIS2MDC_MAG_GetAxes(&magneto_sensor, &magneto_axes);
+			buffer[Inicio] = ((magneto_axes.x));
+			buffer[Inicio++] = ((magneto_axes.y));
+			buffer[Inicio++] = ((magneto_axes.z));
+			Inicio++;
+			if (Inicio/3 == 10)
+			{
+				Inicio = 0;
+				HAL_UART_Transmit(&huart2, buffer, sizeof(buffer), HAL_MAX_DELAY);
+				HAL_GPIO_TogglePin(GPIOE, LED1_Pin);
+			}
+			if (Inicio/3 == 2){
+				HAL_GPIO_WritePin(GPIOE, LED1_Pin, GPIO_PIN_RESET);
+			}
 		}
-		HAL_UART_Receive_IT(&huart2, &buffer, buffer_size);
+		if (flag_UART)
+		{
+			flag_UART = 0;
+			Inicio = 0;
+		}
 	}
   /* USER CODE END 3 */
 }
@@ -252,8 +217,10 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART2|RCC_PERIPHCLK_ADC;
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART2|RCC_PERIPHCLK_I2C2
+                              |RCC_PERIPHCLK_ADC;
   PeriphClkInit.Usart2ClockSelection = RCC_USART2CLKSOURCE_PCLK1;
+  PeriphClkInit.I2c2ClockSelection = RCC_I2C2CLKSOURCE_PCLK1;
   PeriphClkInit.AdcClockSelection = RCC_ADCCLKSOURCE_PLLSAI1;
   PeriphClkInit.PLLSAI1.PLLSAI1Source = RCC_PLLSOURCE_HSI;
   PeriphClkInit.PLLSAI1.PLLSAI1M = 5;
@@ -325,76 +292,6 @@ static void MX_ADC1_Init(void)
 }
 
 /**
-  * @brief TIM1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM1_Init(void)
-{
-
-  /* USER CODE BEGIN TIM1_Init 0 */
-
-  /* USER CODE END TIM1_Init 0 */
-
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
-  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
-
-  /* USER CODE BEGIN TIM1_Init 1 */
-
-  /* USER CODE END TIM1_Init 1 */
-  htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 61;
-  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 65535;
-  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterOutputTrigger2 = TIM_TRGO2_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
-  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
-  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
-  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
-  sBreakDeadTimeConfig.DeadTime = 0;
-  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
-  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
-  sBreakDeadTimeConfig.BreakFilter = 0;
-  sBreakDeadTimeConfig.Break2State = TIM_BREAK2_DISABLE;
-  sBreakDeadTimeConfig.Break2Polarity = TIM_BREAK2POLARITY_HIGH;
-  sBreakDeadTimeConfig.Break2Filter = 0;
-  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
-  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM1_Init 2 */
-
-  /* USER CODE END TIM1_Init 2 */
-  HAL_TIM_MspPostInit(&htim1);
-
-}
-
-/**
   * @brief TIM16 Initialization Function
   * @param None
   * @retval None
@@ -410,7 +307,7 @@ static void MX_TIM16_Init(void)
 
   /* USER CODE END TIM16_Init 1 */
   htim16.Instance = TIM16;
-  htim16.Init.Prescaler = 611;
+  htim16.Init.Prescaler = 6;
   htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim16.Init.Period = 65535;
   htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -652,14 +549,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(WIFI_RST_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : I2C2_SMBA_Pin I2C2_SDA_Pin I2C2_SDAF0_Pin */
-  GPIO_InitStruct.Pin = I2C2_SMBA_Pin|I2C2_SDA_Pin|I2C2_SDAF0_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF4_I2C2;
-  HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
-
   /*Configure GPIO pins : CS_WIFI_Pin C_EN_Pin CS_ADWB_Pin STSAFE_RESET_Pin
                            WIFI_BOOT0_Pin CS_DHC_Pin SEL3_4_Pin */
   GPIO_InitStruct.Pin = CS_WIFI_Pin|C_EN_Pin|CS_ADWB_Pin|STSAFE_RESET_Pin
@@ -798,9 +687,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	// Check which version of the timer triggered this callback and toggle LED
 	if (htim == &htim16 )
 	{
-		HAL_GPIO_TogglePin(GPIOE, LED1_Pin);
-		flag_ADC = 1;
+		flag_MAG = 1;
 	}
+
 }
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {

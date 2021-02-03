@@ -21,5 +21,7 @@ OBJCOPY_BIN :=
 SUBDIRS := \
 Core/Src \
 Core/Startup \
+Drivers/BSP/Components/iis2mdc \
+Drivers/BSP/STEVAL-STWINKT1 \
 Drivers/STM32L4xx_HAL_Driver/Src \
 
