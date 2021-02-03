@@ -1,28 +1,28 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * <h2><center>&copy; Copyright (c) 2021 STMicroelectronics.
-  * All rights reserved.</center></h2>
-  *
-  * This software component is licensed by ST under BSD 3-Clause license,
-  * the "License"; You may not use this file except in compliance with the
-  * License. You may obtain a copy of the License at:
-  *                        opensource.org/licenses/BSD-3-Clause
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Main program body
+ ******************************************************************************
+ * @attention
+ *
+ * <h2><center>&copy; Copyright (c) 2021 STMicroelectronics.
+ * All rights reserved.</center></h2>
+ *
+ * This software component is licensed by ST under BSD 3-Clause license,
+ * the "License"; You may not use this file except in compliance with the
+ * License. You may obtain a copy of the License at:
+ *                        opensource.org/licenses/BSD-3-Clause
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "string.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,6 +42,7 @@
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
 
+TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim16;
 
 UART_HandleTypeDef huart2;
@@ -56,6 +57,7 @@ static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM16_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -63,6 +65,13 @@ static void MX_USART2_UART_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 uint8_t flag_ADC = 0;
+uint8_t flag_UART = 0;
+#define buffer_size 8
+char buffer[buffer_size];
+char parte1[3];
+char parte2;
+void Uart_reception(void);
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
 /* USER CODE END 0 */
 
 /**
@@ -74,6 +83,8 @@ int main(void)
   /* USER CODE BEGIN 1 */
 	uint16_t raw;
 	char msg[10];
+	enum ms_t {reposo, ADC, ADC_x, PWM};
+	enum ms_t estado;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -97,30 +108,104 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM16_Init();
   MX_USART2_UART_Init();
+  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
-  HAL_TIM_Base_Start_IT(&htim16);
+	//HAL_TIM_Base_Start_IT(&htim16);
+	estado = reposo;
+
+	HAL_UART_Transmit(&huart2, "hola\n\r", 7,100000);
+	//  HAL_UART_RegisterCallback(&huart2,  HAL_UART_RX_COMPLETE_CB_ID , Uart_reception);
+	HAL_UART_Receive_IT(&huart2, &buffer, buffer_size);
+
+	memcpy(buffer, "000000", buffer_size);
+
+	int periodo = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-	  /* USER CODE END WHILE */
+	while (1)
+	{
+    /* USER CODE END WHILE */
 
-	  /* USER CODE BEGIN 3 */
-	  if (flag_ADC){
-		  flag_ADC = 0;
+    /* USER CODE BEGIN 3 */
+		switch (estado)
+		{
+			case reposo:
+				if (flag_UART == 1)
+				{
+					flag_UART = 0;
+					memcpy(&parte1, &buffer, 3);
 
-		  HAL_ADC_Start(&hadc1);
-		  //ESPERA A QUE SE COMPLETE LA CONVERSION
-		  HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-		  raw = HAL_ADC_GetValue(&hadc1);
+					if ((strcmp(parte1,"adc") == 0) || (strcmp(buffer,"ADC") == 0))		//PARA ENTRAR AL ESTADO ADC HAY QUE MANDAR 6 LETRAS, ADCNOW POR EJEMPLO, PARA LLENAR EL BUFFER
+					{
+						if ((buffer[3]==40) && (buffer[5]==41)) //VALORES CORRESPONDIENTES A ( Y ) EN ASCII
+						{
+							periodo = buffer[4] - '0';
+							estado = ADC_x;
+						}
+						else
+							estado = ADC;
+					}
+					else if ((strcmp(parte1,"pwm") == 0) || (strcmp(buffer,"PWM") == 0))
+					{
+						estado = PWM;
+						periodo = buffer[4] - '0';
+					}
+					memcpy(buffer, "000000", buffer_size);
+				}
+				if (flag_ADC)
+				{
+					flag_ADC = 0;
 
-		  // Convert to string and print
-		  sprintf(msg, "%hu\r\n", raw);
-		  HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
-	  }
-  }
+					HAL_ADC_Start(&hadc1);
+					//ESPERA A QUE SE COMPLETE LA CONVERSION
+					HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+					raw = HAL_ADC_GetValue(&hadc1);
+
+					// Convert to string and print
+					sprintf(msg, "%hu\r\n", raw);
+					HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+				}
+				break;
+			case ADC:
+
+				HAL_TIM_Base_Stop_IT(&htim16);
+				HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_1);
+
+				HAL_ADC_Start(&hadc1);
+				//ESPERA A QUE SE COMPLETE LA CONVERSION
+				HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+				raw = HAL_ADC_GetValue(&hadc1);
+
+				// Convert to string and print
+				sprintf(msg, "%hu\r\n", raw);
+				HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+				estado = reposo;
+				break;
+
+			case ADC_x:
+
+				htim16.Instance = TIM16;
+				htim16.Init.Prescaler = 611 * periodo;;
+				htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
+				htim16.Init.Period = 65535;
+				htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+				htim16.Init.RepetitionCounter = 0;
+				htim16.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+				HAL_TIM_Base_Init(&htim16);
+				HAL_TIM_Base_Start_IT(&htim16);
+				estado = reposo;
+				break;
+
+			case PWM:
+				htim1.Instance->CCR1 = 10*periodo;
+				HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+				break;
+
+		}
+		HAL_UART_Receive_IT(&huart2, &buffer, buffer_size);
+	}
   /* USER CODE END 3 */
 }
 
@@ -223,7 +308,7 @@ static void MX_ADC1_Init(void)
   }
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_1;
+  sConfig.Channel = ADC_CHANNEL_10;
   sConfig.Rank = ADC_REGULAR_RANK_1;
   sConfig.SamplingTime = ADC_SAMPLETIME_2CYCLES_5;
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
@@ -236,6 +321,76 @@ static void MX_ADC1_Init(void)
   /* USER CODE BEGIN ADC1_Init 2 */
 
   /* USER CODE END ADC1_Init 2 */
+
+}
+
+/**
+  * @brief TIM1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM1_Init(void)
+{
+
+  /* USER CODE BEGIN TIM1_Init 0 */
+
+  /* USER CODE END TIM1_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
+
+  /* USER CODE BEGIN TIM1_Init 1 */
+
+  /* USER CODE END TIM1_Init 1 */
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 61;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 65535;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterOutputTrigger2 = TIM_TRGO2_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
+  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
+  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
+  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
+  sBreakDeadTimeConfig.DeadTime = 0;
+  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
+  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+  sBreakDeadTimeConfig.BreakFilter = 0;
+  sBreakDeadTimeConfig.Break2State = TIM_BREAK2_DISABLE;
+  sBreakDeadTimeConfig.Break2Polarity = TIM_BREAK2POLARITY_HIGH;
+  sBreakDeadTimeConfig.Break2Filter = 0;
+  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
+  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM1_Init 2 */
+
+  /* USER CODE END TIM1_Init 2 */
+  HAL_TIM_MspPostInit(&htim1);
 
 }
 
@@ -640,12 +795,22 @@ static void MX_GPIO_Init(void)
 // Callback: timer has rolled over
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-  // Check which version of the timer triggered this callback and toggle LED
-  if (htim == &htim16 )
-  {
-    HAL_GPIO_TogglePin(GPIOE, LED1_Pin);
-    flag_ADC = 1;
-  }
+	// Check which version of the timer triggered this callback and toggle LED
+	if (htim == &htim16 )
+	{
+		HAL_GPIO_TogglePin(GPIOE, LED1_Pin);
+		flag_ADC = 1;
+	}
+}
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	//HAL_UART_Transmit(&huart2, "Recibido\n\r", 11, 100000);
+	HAL_UART_Receive_IT(&huart2, &buffer, buffer_size);
+	flag_UART = 1;
+}
+void Uart_reception(void)
+{
+	flag_UART = 1;
 }
 /* USER CODE END 4 */
 
@@ -656,11 +821,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
-  }
+	/* User can add his own implementation to report the HAL error return state */
+	__disable_irq();
+	while (1)
+	{
+	}
   /* USER CODE END Error_Handler_Debug */
 }
 
@@ -675,7 +840,7 @@ void Error_Handler(void)
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
+	/* User can add his own implementation to report the file name and line number,
      ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
